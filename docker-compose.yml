@@ -1,0 +1,13 @@
+services:
+  dolt:
+    container_name: beads_dolt
+    build: .
+    user: root
+    ports:
+      - "3307:3307"
+    volumes:
+      - ./data:/data
+      - .:/repo
+      - .ssh:/home/dev/.ssh
+    environment:
+      - SYNC_SCHEDULE=${SYNC_SCHEDULE:-0 * * * *}

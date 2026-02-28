@@ -1,0 +1,7 @@
+.ssh/
+*.swp
+git-remote-cache/
+sql-server.info
+LOCK
+temptf/
+stats/
