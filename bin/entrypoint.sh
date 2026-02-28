@@ -14,16 +14,16 @@ cron
 cd /data
 
 # Start dolt in the background to run init queries
-gosu dev dolt sql-server --host 0.0.0.0 --port 3307 &
+gosu dev dolt sql-server --host 0.0.0.0 --port "${DOLT_PORT:-3307}" &
 DOLT_PID=$!
 
 # Wait for server to be ready
-until mysql -h 127.0.0.1 -P 3307 -u root -e "SELECT 1" >/dev/null 2>&1; do
+until mysql -h 127.0.0.1 -P "${DOLT_PORT:-3307}" -u root -e "SELECT 1" >/dev/null 2>&1; do
     sleep 0.5
 done
 
 # Allow connections from any host (not just localhost) so external clients can connect
-mysql -h 127.0.0.1 -P 3307 -u root -e "
+mysql -h 127.0.0.1 -P "${DOLT_PORT:-3307}" -u root -e "
     CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '';
     GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
     FLUSH PRIVILEGES;

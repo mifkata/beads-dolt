@@ -4,10 +4,11 @@ services:
     build: .
     user: root
     ports:
-      - "3307:3307"
+      - "${DOLT_PORT:-3307}:${DOLT_PORT:-3307}"
     volumes:
       - ./data:/data
       - .:/repo
       - .ssh:/home/dev/.ssh
     environment:
       - SYNC_SCHEDULE=${SYNC_SCHEDULE:-0 * * * *}
+      - DOLT_PORT=${DOLT_PORT:-3307}

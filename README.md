@@ -176,11 +176,13 @@ Edit `data/config.yaml` to change dolt sql-server settings (logging, TLS, max co
 
 ### Port
 
-Change the port in three places:
+Set `DOLT_PORT` to change the server port. Defaults to `3307`.
 
-- `docker-compose.yml` — the port mapping
-- `bin/entrypoint.sh` — the `--port` flag passed to `dolt sql-server`
-- `bin/sync.sh` — the `-P` flag on the mysql connection string
+```bash
+DOLT_PORT=3308 make start
+```
+
+Or set it in your environment before running any make command.
 
 ### Sync frequency
 

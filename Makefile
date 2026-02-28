@@ -1,5 +1,6 @@
 SYNC_SCHEDULE ?= 0 * * * *
-export SYNC_SCHEDULE
+DOLT_PORT ?= 3307
+export SYNC_SCHEDULE DOLT_PORT
 
 .PHONY: start stop build rebuild restart shell mysql logs
 
@@ -22,7 +23,7 @@ shell:
 	docker compose exec dolt bash
 
 mysql:
-	docker compose exec dolt mysql -h 127.0.0.1 -P 3307 -u root
+	docker compose exec dolt mysql -h 127.0.0.1 -P $(DOLT_PORT) -u root
 
 logs:
 	docker compose exec dolt tail -f /tmp/dolt-sync.log
