@@ -82,14 +82,18 @@ The targets are defined in the [`Makefile`](Makefile).
 
 | Command | Description |
 | --- | --- |
-| `bd dolt show` | Show the project's server settings and connection |
+| `bd dolt show` | Print the mode and connection. Embedded mode prints `Mode: embedded` |
 | `bd dolt commit` | Commit pending Beads changes |
 | `bd dolt push` | Push the project's database to its Dolt remote |
 | `bd dolt pull` | Pull the project's database from its Dolt remote |
 
+`bd dolt set` and `bd dolt test` run after the project has left embedded mode. Until then they exit with `not supported in embedded mode (no Dolt server)`.
+
 ### Switch an existing project
 
-Export before changing the connection. `bd export` writes the issue records, including labels, dependencies, and comments. It does not include Dolt branch history. The previous embedded database stays in `.beads/embeddeddolt/`.
+Beads starts a project in embedded mode. The database is `.beads/embeddeddolt/`. `bd dolt show` prints `Mode: embedded`. `bd dolt set` and `bd dolt test` exit with `not supported in embedded mode (no Dolt server)`. Writing `dolt.mode` in `.beads/config.yaml` leaves the project embedded.
+
+Leave embedded mode with `bd init --server --external`, after the export below. `bd export` writes the issue records, including labels, dependencies, and comments. It does not include Dolt branch history. The embedded database stays in `.beads/embeddeddolt/`.
 
 1. In the project, write the export and commit `.beads/issues.jsonl` there.
 
@@ -111,7 +115,7 @@ bd config get issue_prefix
 bd init --server --external --server-host 127.0.0.1 --server-port 3307 --server-user root --database <database> --prefix <prefix> --skip-agents
 ```
 
-`bd init` records server mode in `.beads/metadata.json` and creates `<database>` on this server when it is missing. It can also commit beads files in the project. Until the import below, `bd list` reads the new database and shows no issues.
+`bd init` records server mode in `.beads/metadata.json` and creates `<database>` on this server when it is missing. It can also commit beads files in the project. `bd dolt show` then prints `Mode: server`, and `bd dolt set` works. Until the import below, `bd list` reads the new database and shows no issues.
 
 4. Load the export. `<issue-id>` is an id from `.beads/issues.jsonl`.
 
@@ -147,7 +151,7 @@ On startup the server writes `data/config.yaml`. That file holds logging, TLS, a
 
 The commit author is `dev <dev@dolt.local>`. Change the `dolt config` lines in the [`Dockerfile`](Dockerfile) and rebuild.
 
-From another container, a project that is already in server mode reaches this server at `host.docker.internal`. Add the name on the host when it is missing:
+From another container, a project that has left embedded mode reaches this server at `host.docker.internal`. Add the name on the host when it is missing:
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
