@@ -1,5 +1,5 @@
 #!/bin/bash
-# List databases, list their issues, count them, or drop one database after the name is typed.
+# List databases, list their issues, count them, rename one, or drop one after the name is typed.
 
 set -u
 
@@ -13,9 +13,11 @@ Usage:
   databases.sh issues [--no-color] [database]
   databases.sh stats [--no-color]
   databases.sh purge <database>
+  databases.sh rename <from> <to>
 
 Issue lines use color in a terminal. --no-color, or a set NO_COLOR variable, prints plain text.
 purge drops one database. Type that database's name when asked.
+rename stops the server, renames the database directory, and starts the server. Type the new name when asked.
 EOF
 }
 
@@ -391,6 +393,62 @@ cmd_stats() {
     rm -f "$stats_file"
 }
 
+cmd_rename() {
+    local from=${1:-} to=${2:-} answer i
+    if [ -z "$from" ] || [ -z "$to" ]; then
+        echo "Usage: make db-rename FROM=<database> TO=<database>" >&2
+        exit 1
+    fi
+    if [ "$from" = "$to" ]; then
+        echo "Database $from is already named $to." >&2
+        exit 1
+    fi
+    if ! is_name "$to" || is_system "$to"; then
+        echo "Refusing destination name '$to'." >&2
+        exit 1
+    fi
+    require_database "$from"
+    if user_databases | grep -qx "$to"; then
+        echo "Database $to already exists." >&2
+        exit 1
+    fi
+    if [ ! -d "$ROOT/data/$from" ]; then
+        echo "Database $from has no directory under data/." >&2
+        exit 1
+    fi
+    printf 'Type %s to rename %s to it: ' "$to" "$from"
+    IFS= read -r answer || true
+    answer=${answer%$'\r'}
+    if [ "$answer" != "$to" ]; then
+        echo "Not renamed." >&2
+        exit 1
+    fi
+    echo "Stopping the server to rename $from."
+    if ! docker compose stop; then
+        echo "Could not stop the server. Not renamed." >&2
+        exit 1
+    fi
+    if [ -e "$ROOT/data/$to" ] || ! mv "$ROOT/data/$from" "$ROOT/data/$to"; then
+        docker compose start >/dev/null
+        echo "Rename failed. The server was started again." >&2
+        exit 1
+    fi
+    echo "Starting the server."
+    if ! docker compose start; then
+        echo "Renamed the directory to $to, but the server did not start." >&2
+        exit 1
+    fi
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        if mysql_q -e "SHOW DATABASES" 2>/dev/null | grep -qx "$to"; then
+            echo "Renamed $from to $to."
+            return 0
+        fi
+        sleep 1
+    done
+    echo "Renamed the directory to $to, but the server is not serving it yet." >&2
+    exit 1
+}
+
 cmd_purge() {
     local db=${1:-} answer
     if [ -z "$db" ]; then
@@ -418,5 +476,6 @@ case "$cmd" in
     issues) cmd_issues "${2:-}" ;;
     stats) cmd_stats ;;
     purge) cmd_purge "${2:-}" ;;
+    rename) cmd_rename "${2:-}" "${3:-}" ;;
     *) usage >&2; exit 1 ;;
 esac

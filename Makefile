@@ -2,8 +2,10 @@ SYNC_INTERVAL ?= 60
 export SYNC_INTERVAL
 
 DB ?=
+FROM ?=
+TO ?=
 
-.PHONY: start stop build rebuild restart shell mysql logs test databases issues stats purge
+.PHONY: start stop build rebuild restart shell mysql logs test databases issues stats purge db-rename
 
 start:
 	docker compose up -d
@@ -56,3 +58,6 @@ stats:
 
 purge:
 	@./bin/databases.sh purge $(DB)
+
+db-rename:
+	@./bin/databases.sh rename "$(FROM)" "$(TO)"
