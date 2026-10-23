@@ -1,50 +1,71 @@
 # Beads Dolt
 
-Dolt SQL server running in Docker with automatic sync (commit, pull, push) every hour.
+Dolt server that stores one Beads database per project and pushes changes to GitHub.
 
-## Table of contents
+Fork this repository for your own server and keep that fork private. Once the server is running, its git history contains the database files. This repository does not.
 
-- [Quick start](#quick-start)
-- [Makefile commands](#makefile-commands)
-- [How it works](#how-it-works)
-- [Adding remotes](#adding-remotes)
-- [Beads configuration](#beads-configuration)
-- [SSH keys](#ssh-keys)
-- [Volumes](#volumes)
-- [Customisation](#customisation)
-  - [Server config](#server-config)
-  - [Port](#port)
-  - [Sync frequency](#sync-frequency)
-  - [Sync logs](#sync-logs)
-  - [Dolt author](#dolt-author)
-- [Resolving merge conflicts](#resolving-merge-conflicts)
-- [License](#license)
+It runs in Docker and checks for changes every minute.
 
-## Quick start
+## 📑 Contents
 
-Fork this repository and clone your fork locally. Your fork should be **private** since it will contain your database data.
+- [Requirements](#-requirements)
+- [Installation](#-installation)
+- [Databases](#-databases)
+- [Usage](#-usage)
+- [Configuration](#-configuration)
+- [Architecture](#-architecture)
+- [Troubleshooting](#-troubleshooting)
+- [License](#-license)
+
+## 📦 Requirements
+
+- [Docker](https://docs.docker.com/get-started/get-docker/) with the `docker compose` command
+- [Git](https://git-scm.com/downloads)
+- [GNU Make](https://www.gnu.org/software/make/)
+- [Beads](https://github.com/gastownhall/beads/blob/main/docs/getting-started/installation.md) (`bd`)
+- A [GitHub SSH key](https://docs.github.com/en/authentication/connecting-to-github-with-ssh) that can push to your fork
+
+## 🔧 Installation
+
+1. Fork this repository and clone your fork.
 
 ```bash
 git clone git@github.com:<you>/beads-dolt.git
 cd beads-dolt
+```
+
+2. Put the SSH private key in `.ssh`. [`docker-compose.yml`](docker-compose.yml) mounts that directory into the container, and the sync push uses it.
+
+3. Start the server.
+
+```bash
 make start
 ```
 
-Or directly with docker compose:
-
-```bash
-docker compose up -d
-```
-
-Connect to the database:
+4. Check that the databases are being served.
 
 ```bash
 make mysql
 ```
 
-From another Docker container, connect via `host.docker.internal:3307` — no extra network configuration needed.
+```sql
+SHOW DATABASES;
+```
 
-## Makefile commands
+The [Databases](#-databases) section lists them.
+
+5. Connect each project by following [Switch an existing project](#switch-an-existing-project). One project uses one database.
+
+## 📚 Databases
+
+[`bin/sync.sh`](bin/sync.sh) rewrites the table between the markers from the databases this server is serving. A repository is filled in from the first value it finds: `sync.remote`, `github.repo`, `gitlab.repo`, a Dolt remote named `origin`, a route, or a repo path. Edit the text outside the markers. The next sync replaces the table.
+
+<!-- databases:start -->
+| Database | Issue prefix | Repository |
+| --- | --- | --- |
+<!-- databases:end -->
+
+## 💻 Usage
 
 | Command | Description |
 |---------|-------------|
@@ -57,83 +78,80 @@ From another Docker container, connect via `host.docker.internal:3307` — no ex
 | `make mysql` | Connect to the dolt server via mysql |
 | `make logs` | Tail the sync log |
 
-## How it works
+The targets are defined in the [`Makefile`](Makefile).
 
-The container runs two things:
+| Command | Description |
+| --- | --- |
+| `bd dolt show` | Show the project's server settings and connection |
+| `bd dolt commit` | Commit pending Beads changes |
+| `bd dolt push` | Push the project's database to its Dolt remote |
+| `bd dolt pull` | Pull the project's database from its Dolt remote |
 
-1. **Dolt SQL server** on port 3307 — serves all databases found in `./data`
-2. **Sync loop** (on startup, then every hour) — commits git repo changes, then for each dolt database commits local changes, pulls from remote, pushes to remote
+### Switch an existing project
 
-### Sync strategy
+Export before changing the connection. `bd export` writes the issue records, including labels, dependencies, and comments. It does not include Dolt branch history. The previous embedded database stays in `.beads/embeddeddolt/`.
 
-The sync script (`bin/sync.sh`) avoids collisions between multiple users by following this order:
-
-1. **Commit** any uncommitted local changes
-2. **Pull** from remote — dolt merges at the row level, so concurrent edits to different rows merge cleanly
-3. **Push** to remote — if it fails (someone else pushed in between), the next cycle retries
-
-If a pull produces a merge conflict (two users edited the same row), the script logs a warning and skips push until the conflict is resolved manually.
-
-## Adding remotes
-
-Remotes enable sync between multiple users. Without a remote configured, the cron job only commits locally.
-
-### Via dolt CLI (recommended)
-
-Run from each database directory:
+1. In the project, write the export and commit `.beads/issues.jsonl` there.
 
 ```bash
-cd data/<database>
-dolt remote add origin https://doltremoteapi.dolthub.com/<org>/<database>
+bd export --all -o .beads/issues.jsonl
+git add .beads/issues.jsonl
+git commit -m "backup beads issues before moving to the dolt server"
 ```
 
-SSH remote:
+2. Read the current issue prefix.
 
 ```bash
-cd data/<database>
-dolt remote add origin ssh://git@github.com:<org>/<database>.git
+bd config get issue_prefix
 ```
 
-Verify:
+3. Connect the project to a new database. `<database>` must be a name that is not already in [Databases](#-databases). `<prefix>` is the value printed above. From another container, use `--server-host host.docker.internal`.
 
 ```bash
-cd data/<database>
-dolt remote -v
+bd init --server --external --server-host 127.0.0.1 --server-port 3307 --server-user root --database <database> --prefix <prefix> --skip-agents
 ```
 
-### Via SQL
+`bd init` records server mode in `.beads/metadata.json` and creates `<database>` on this server when it is missing. It can also commit beads files in the project. Until the import below, `bd list` reads the new database and shows no issues.
 
-If the server is already running, you can add remotes through SQL instead:
+4. Load the export. `<issue-id>` is an id from `.beads/issues.jsonl`.
 
-```sql
-USE <database>;
-CALL dolt_remote('add', 'origin', 'https://doltremoteapi.dolthub.com/<org>/<database>');
+```bash
+bd import .beads/issues.jsonl
+bd show <issue-id>
 ```
 
-SSH remote:
+5. Keep `.beads/issues.jsonl` in the project repository.
 
-```sql
-USE <database>;
-CALL dolt_remote('add', 'origin', 'ssh://git@github.com:<org>/<database>.git');
+```bash
+bd config set export.auto true
+bd config set export.git-add true
 ```
 
-Verify:
+`export.auto` rewrites `.beads/issues.jsonl` after later `bd` writes. `export.git-add` stages that file. Both settings are stored in `.beads/config.yaml`. Commit `.beads/issues.jsonl` in the project when it changes, and keep that file tracked.
 
-```sql
-SELECT * FROM dolt_remotes;
+## 🔩 Configuration
+
+| Variable | Required | Default | Description |
+| --- | --- | --- | --- |
+| `SYNC_INTERVAL` | No | `60` | Seconds between sync cycles. Set it in the environment before `make start`. [`docker-compose.yml`](docker-compose.yml) passes it to [`bin/entrypoint.sh`](bin/entrypoint.sh). |
+
+```bash
+SYNC_INTERVAL=300 make start
 ```
 
-Once a remote named `origin` exists, the cron job handles pull/push automatically.
+`SYNC_SCHEDULE` is ignored.
 
-## Beads configuration
+The server listens on port `3307`. To change it, edit the port in [`docker-compose.yml`](docker-compose.yml), [`bin/entrypoint.sh`](bin/entrypoint.sh), and [`bin/sync.sh`](bin/sync.sh).
 
-To use the same hostname (`host.docker.internal`) from both the host and other containers, add it to your `/etc/hosts`:
+On startup the server writes `data/config.yaml`. That file holds logging, TLS, and the other [Dolt server configuration](https://docs.dolthub.com/sql-reference/server/configuration) options.
+
+The commit author is `dev <dev@dolt.local>`. Change the `dolt config` lines in the [`Dockerfile`](Dockerfile) and rebuild.
+
+From another container, a project that is already in server mode reaches this server at `host.docker.internal`. Add the name on the host when it is missing:
 
 ```bash
 echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
 ```
-
-Then configure `bd` to use it:
 
 ```bash
 bd dolt set host host.docker.internal
@@ -142,77 +160,40 @@ bd dolt set user root
 bd dolt set database <database>
 ```
 
-View current config and connection status:
+Add a Dolt remote through the running server. `<remote-url>` is an address such as `https://doltremoteapi.dolthub.com/<org>/<database>` or `ssh://git@github.com:<org>/<database>.git`.
 
-```bash
-bd dolt show
+```sql
+USE <database>;
+CALL dolt_remote('add', 'origin', '<remote-url>');
+SELECT * FROM dolt_remotes;
 ```
 
-Once connected, `bd` can commit, push, and pull directly:
-
-```bash
-bd dolt commit
-bd dolt push
-bd dolt pull
-```
-
-## SSH keys
-
-Your host `.ssh` directory is mounted into the container at `/home/dev/.ssh`. Any SSH keys available on the host are usable by dolt for remote operations — no extra setup needed.
-
-## Volumes
+After a remote named `origin` exists, the sync cycle pulls it and pushes it.
 
 | Host | Container | Purpose |
-|------|-----------|---------|
-| `./data` | `/data` | Dolt databases and server config |
-| `.` | `/repo` | Full git repository |
-| `.ssh` | `/home/dev/.ssh` | SSH keys for remote sync |
+| --- | --- | --- |
+| `./data` | `/data` | Databases and server config |
+| `.` | `/repo` | Git repository |
+| `.ssh` | `/home/dev/.ssh` | SSH key used for the Git push |
+| [`bin/entrypoint.sh`](bin/entrypoint.sh) | `/usr/local/bin/entrypoint.sh` | Process entrypoint |
+| [`bin/sync.sh`](bin/sync.sh) | `/usr/local/bin/sync.sh` | Sync script |
 
-## Customisation
+## 🧱 Architecture
 
-### Server config
-
-Edit `data/config.yaml` to change dolt sql-server settings (logging, TLS, max connections, etc.). The server reads this file from `/data` on startup. See the [dolt server configuration docs](https://docs.dolthub.com/sql-reference/server/configuration) for all options.
-
-### Port
-
-Set `DOLT_PORT` to change the server port. Defaults to `3307`.
-
-```bash
-DOLT_PORT=3308 make start
+```mermaid
+flowchart LR
+  client[Beads client] --> server[Dolt SQL server]
+  server --> databases[data databases]
+  loop[Sync loop] --> server
+  loop --> repo[Git repository]
+  repo --> github[GitHub]
 ```
 
-Or set it in your environment before running any make command.
+[`bin/entrypoint.sh`](bin/entrypoint.sh) starts the SQL server on port 3307 and serves each database directory under [`data/`](data/). [`bin/sync.sh`](bin/sync.sh) runs on startup and then every `SYNC_INTERVAL` seconds: it commits each database, commits a dirty git tree, and pushes when `main` is ahead of `origin/main`. A Dolt remote named `origin` is pulled and pushed in that cycle, and a conflict waits until it is resolved.
 
-### Sync frequency
+## 🩺 Troubleshooting
 
-Set `SYNC_SCHEDULE` to a cron expression. Defaults to `0 * * * *` (every hour).
-
-```bash
-# Every 5 minutes
-SYNC_SCHEDULE="*/5 * * * *" make start
-
-# Every 6 hours
-SYNC_SCHEDULE="0 */6 * * *" make start
-```
-
-Or set it in your environment before running any make command.
-
-### Sync logs
-
-View sync logs:
-
-```bash
-make logs
-```
-
-### Dolt author
-
-The default commit author is `dev <dev@dolt.local>`. To change it, edit the `dolt config` lines in the `Dockerfile` and rebuild.
-
-## Resolving merge conflicts
-
-If the sync log shows conflicts:
+The sync log names the database when a pull leaves conflicts. Connect and resolve them. The next cycle pushes the resolution.
 
 ```bash
 make mysql
@@ -220,24 +201,15 @@ make mysql
 
 ```sql
 USE <database>;
-
--- View conflicted tables
 SELECT * FROM dolt_conflicts;
-
--- View conflict details for a specific table
 SELECT * FROM dolt_conflicts_<table_name>;
-
--- Resolve by accepting ours (local) or theirs (remote)
 CALL dolt_conflicts_resolve('--ours', '<table_name>');
--- or
 CALL dolt_conflicts_resolve('--theirs', '<table_name>');
-
--- Commit the resolution
 CALL dolt_commit('-am', 'resolve merge conflict');
 ```
 
-The next sync cycle will push the resolution.
+Use one of the two resolve calls. `--ours` keeps this server's row. `--theirs` keeps the remote row.
 
-## License
+## 📄 License
 
 [MIT](LICENSE)

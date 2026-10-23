@@ -4,11 +4,12 @@ services:
     build: .
     user: root
     ports:
-      - "${DOLT_PORT:-3307}:${DOLT_PORT:-3307}"
+      - "3307:3307"
     volumes:
       - ./data:/data
       - .:/repo
       - .ssh:/home/dev/.ssh
+      - ./bin/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./bin/sync.sh:/usr/local/bin/sync.sh:ro
     environment:
-      - SYNC_SCHEDULE=${SYNC_SCHEDULE:-0 * * * *}
-      - DOLT_PORT=${DOLT_PORT:-3307}
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-60}

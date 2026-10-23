@@ -5,3 +5,8 @@ sql-server.info
 LOCK
 temptf/
 stats/
+
+# Server runtime. Database directories under data/<name>/ are the backup in a private fork.
+data/.dolt/
+data/.doltcfg/
+data/.dolt_dropped_databases/
