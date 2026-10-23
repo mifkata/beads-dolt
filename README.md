@@ -42,17 +42,13 @@ cd beads-dolt
 make start
 ```
 
-4. Check that the databases are being served.
+4. Check that the server is up.
 
 ```bash
-make mysql
+make test
 ```
 
-```sql
-SHOW DATABASES;
-```
-
-The [Databases](#-databases) section lists them.
+This runs inside the container. A running server prints `✅ Dolt is serving on port 3307`. `make databases` lists what it is serving.
 
 5. Connect each project by following [Switch an existing project](#switch-an-existing-project). One project uses one database.
 
@@ -70,6 +66,7 @@ The [Databases](#-databases) section lists them.
 | Command | Description |
 |---------|-------------|
 | `make start` | Start the server in the background |
+| `make test` | Check that the server is accepting connections |
 | `make stop` | Stop and remove the container |
 | `make build` | Build the Docker image |
 | `make rebuild` | Build from scratch (no cache) |
