@@ -147,11 +147,7 @@ On startup the server writes `data/config.yaml`. That file holds logging, TLS, a
 
 The commit author is `dev <dev@dolt.local>`. Change the `dolt config` lines in the [`Dockerfile`](Dockerfile) and rebuild.
 
-From another container, a project that has left embedded mode reaches this server at `host.docker.internal`. Add the name on the host when it is missing:
-
-```bash
-echo "127.0.0.1 host.docker.internal" | sudo tee -a /etc/hosts
-```
+From another container, Docker already resolves `host.docker.internal` to this machine:
 
 ```bash
 bd dolt set host host.docker.internal
