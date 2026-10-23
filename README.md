@@ -77,8 +77,13 @@ The [Databases](#-databases) section lists them.
 | `make shell` | Open a bash shell in the container |
 | `make mysql` | Connect to the dolt server via mysql |
 | `make logs` | Tail the sync log |
+| `make databases` | List each database, its issue prefix, and its repository URL when one is stored |
+| `make issues` | List issues in every database |
+| `make issues DB=<database>` | List issues in one database |
+| `make stats` | Print a table of issue counts for every database, by status, priority, and total |
+| `make purge DB=<database>` | Drop one database after you type its name |
 
-The targets are defined in the [`Makefile`](Makefile).
+The targets are defined in the [`Makefile`](Makefile). [`bin/databases.sh`](bin/databases.sh) is the script behind these targets. An issue line looks like `pl-dcq [CLOSED][P2](feature): Implement Admin Worker Tasks page (pl-ri6)`. `make issues` prefixes each line with its database, as in `beads_pl/pl-dcq [CLOSED][P2](feature): Implement Admin Worker Tasks page (pl-ri6)`. `make issues DB=<database>` prints the id alone. In a terminal the id is cyan, the status is colored by state, and the type is magenta. `./bin/databases.sh issues --no-color` prints the same text in plain form, and so does a set `NO_COLOR` variable. An unknown database name prints `Database <database> was not found. Available options:` followed by that list. `make purge` drops a single database, and only after the name you type matches it. `information_schema`, `mysql`, `performance_schema`, and `sys` are refused. It also removes that database's copy under `data/.dolt_dropped_databases/`, so the next sync does not commit the dropped database.
 
 | Command | Description |
 | --- | --- |

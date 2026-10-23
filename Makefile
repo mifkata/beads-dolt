@@ -1,7 +1,9 @@
 SYNC_INTERVAL ?= 60
 export SYNC_INTERVAL
 
-.PHONY: start stop build rebuild restart shell mysql logs
+DB ?=
+
+.PHONY: start stop build rebuild restart shell mysql logs databases issues stats purge
 
 start:
 	docker compose up -d
@@ -26,3 +28,15 @@ mysql:
 
 logs:
 	docker compose exec dolt tail -f /tmp/dolt-sync.log
+
+databases:
+	@./bin/databases.sh list
+
+issues:
+	@./bin/databases.sh issues $(DB)
+
+stats:
+	@./bin/databases.sh stats
+
+purge:
+	@./bin/databases.sh purge $(DB)
