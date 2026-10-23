@@ -39,6 +39,19 @@ mysql_q() {
     mysql --protocol=TCP -h 127.0.0.1 -P 3307 -u root -N --batch "$@"
 }
 
+is_system() {
+    case "$1" in
+        information_schema|mysql|performance_schema|sys) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+is_beads() {
+    local db=$1 found
+    found=$(mysql_q --database="$db" -e "SELECT 1 FROM config WHERE \`key\`='issue_prefix' LIMIT 1" 2>/dev/null || true)
+    [ -n "$found" ]
+}
+
 readme_cell() {
     local value=$1
     value=${value//$'\r'/}
@@ -62,7 +75,7 @@ database_link() {
         "SELECT repo_path FROM repo_mtimes LIMIT 1"
     )
     for sql in "${queries[@]}"; do
-        value=$(mysql_q -e "USE \`$db\`; $sql" 2>/dev/null || true)
+        value=$(mysql_q --database="$db" -e "$sql" 2>/dev/null || true)
         value=${value%%$'\n'*}
         if [ -n "$value" ]; then
             printf '%s' "$value"
@@ -89,14 +102,16 @@ update_readme_databases() {
     rm -f "$err"
 
     rows=""
-    for db in $dbs; do
-        case "$db" in
-            information_schema|mysql|performance_schema|sys) continue ;;
-        esac
-        if ! [[ "$db" =~ ^[A-Za-z0-9_]+$ ]]; then
+    while IFS= read -r db || [ -n "$db" ]; do
+        [ -n "$db" ] || continue
+        if is_system "$db"; then
             continue
         fi
-        prefix=$(mysql_q -e "USE \`$db\`; SELECT value FROM config WHERE \`key\`='issue_prefix' LIMIT 1" 2>/dev/null || true)
+        if ! is_beads "$db"; then
+            echo "skipping: $db" >&2
+            continue
+        fi
+        prefix=$(mysql_q --database="$db" -e "SELECT value FROM config WHERE \`key\`='issue_prefix' LIMIT 1" 2>/dev/null || true)
         prefix=${prefix%%$'\n'*}
         link=$(database_link "$db")
         if [ -n "$prefix" ]; then
@@ -106,7 +121,7 @@ update_readme_databases() {
         fi
         line="| \`$db\` | $prefix | $(readme_cell "$link") |"
         rows="${rows}${line}"$'\n'
-    done
+    done <<< "$dbs"
 
     blockfile=$(mktemp)
     {
@@ -151,24 +166,25 @@ flush_dolt() {
     rm -f "$err"
 
     local committed=""
-    for db in $dbs; do
-        case "$db" in
-            information_schema|mysql|performance_schema|sys) continue ;;
-        esac
-        if ! [[ "$db" =~ ^[A-Za-z0-9_]+$ ]]; then
-            echo "[$NOW] dolt: skipping unexpected database name: $db"
+    while IFS= read -r db || [ -n "$db" ]; do
+        [ -n "$db" ] || continue
+        if is_system "$db"; then
+            continue
+        fi
+        if ! is_beads "$db"; then
+            echo "skipping: $db" >&2
             continue
         fi
 
         # DOLT_COMMIT on a clean database is an error and spams the server log.
-        if ! pending=$(mysql_q -e "USE \`$db\`; SELECT COUNT(*) FROM dolt_status;" 2>&1); then
+        if ! pending=$(mysql_q --database="$db" -e "SELECT COUNT(*) FROM dolt_status;" 2>&1); then
             echo "[$NOW] dolt: $db status failed: $pending"
             failed=1
             continue
         fi
         if [ "$pending" != "0" ]; then
-            mysql_q -e "USE \`$db\`; CALL DOLT_ADD('-A');" >/dev/null 2>&1 || true
-            if out=$(mysql_q -e "USE \`$db\`; CALL DOLT_COMMIT('-am', 'auto-sync: $NOW');" 2>&1); then
+            mysql_q --database="$db" -e "CALL DOLT_ADD('-A');" >/dev/null 2>&1 || true
+            if out=$(mysql_q --database="$db" -e "CALL DOLT_COMMIT('-am', 'auto-sync: $NOW');" 2>&1); then
                 committed="${committed} ${db}"
             elif ! printf '%s' "$out" | grep -qiE 'nothing to commit|no changes'; then
                 echo "[$NOW] dolt: $db commit failed: $out"
@@ -176,7 +192,7 @@ flush_dolt() {
             fi
         fi
 
-        if ! count=$(mysql_q -e "USE \`$db\`; SELECT COUNT(*) FROM dolt_remotes WHERE name='origin';" 2>&1); then
+        if ! count=$(mysql_q --database="$db" -e "SELECT COUNT(*) FROM dolt_remotes WHERE name='origin';" 2>&1); then
             echo "[$NOW] dolt: $db remote check failed: $count"
             failed=1
             continue
@@ -184,17 +200,17 @@ flush_dolt() {
         [ "$count" = "0" ] && continue
 
         echo "[$NOW] dolt: $db pulling origin"
-        if ! out=$(mysql_q -e "USE \`$db\`; CALL DOLT_PULL('origin');" 2>&1); then
+        if ! out=$(mysql_q --database="$db" -e "CALL DOLT_PULL('origin');" 2>&1); then
             echo "[$NOW] dolt: $db pull failed: $out"
             failed=1
             continue
         fi
         echo "[$NOW] dolt: $db pushing origin"
-        if ! out=$(mysql_q -e "USE \`$db\`; CALL DOLT_PUSH('origin', 'main');" 2>&1); then
+        if ! out=$(mysql_q --database="$db" -e "CALL DOLT_PUSH('origin', 'main');" 2>&1); then
             echo "[$NOW] dolt: $db push failed (will retry): $out"
             failed=1
         fi
-    done
+    done <<< "$dbs"
 
     if [ -n "$committed" ]; then
         echo "[$NOW] dolt committed:${committed}"
@@ -215,6 +231,20 @@ git_sync() {
     fi
 
     if [ -n "$status" ]; then
+        local oversized="" path bytes
+        while IFS= read -r -d '' path; do
+            bytes=$(wc -c < "$path" 2>/dev/null || echo 0)
+            bytes=${bytes//[[:space:]]/}
+            if [ "${bytes:-0}" -ge 100000000 ]; then
+                oversized="${oversized}
+${path} (${bytes} bytes)"
+            fi
+        done < <(git ls-files -co --exclude-standard -z)
+        if [ -n "$oversized" ]; then
+            echo "[$NOW] git: not committing. GitHub rejects a file of 100 MB or more:${oversized}"
+            failed=1
+            return
+        fi
         echo "[$NOW] git: committing"
         git add -A
         if ! git commit -m "auto-sync: $NOW"; then
@@ -250,10 +280,16 @@ git_sync() {
 
     if [ "$dirty" -eq 0 ] && git rev-parse --verify --quiet origin/main >/dev/null; then
         if ! git merge-base --is-ancestor origin/main HEAD; then
-            echo "[$NOW] git: rebasing onto origin/main"
-            if ! git rebase origin/main; then
-                echo "[$NOW] git: rebase failed — aborting, will retry"
-                git rebase --abort || true
+            if git merge-base --is-ancestor HEAD origin/main; then
+                echo "[$NOW] git: rebasing onto origin/main"
+                if ! git rebase origin/main; then
+                    echo "[$NOW] git: rebase failed — aborting, will retry"
+                    git rebase --abort || true
+                    failed=1
+                    return
+                fi
+            else
+                echo "[$NOW] git: history has diverged from origin/main — not rebasing or pushing"
                 failed=1
                 return
             fi

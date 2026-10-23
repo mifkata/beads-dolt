@@ -44,15 +44,23 @@ mysql_q() {
     docker compose exec -T dolt mysql --protocol=TCP -h 127.0.0.1 -P 3307 -u root -N --batch "$@" </dev/null
 }
 
-is_name() {
-    [[ "$1" =~ ^[A-Za-z0-9_]+$ ]]
-}
-
 is_system() {
     case "$1" in
         information_schema|mysql|performance_schema|sys) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+is_beads() {
+    local db=$1 found
+    found=$(mysql_q --database="$db" -e "SELECT 1 FROM config WHERE \`key\`='issue_prefix' LIMIT 1" 2>/dev/null || true)
+    [ -n "$found" ]
+}
+
+quote_ident() {
+    local name=$1
+    name=${name//\`/\`\`}
+    printf '`%s`' "$name"
 }
 
 upper() {
@@ -81,21 +89,22 @@ status_sgr() {
 user_databases() {
     local dbs db
     dbs=$(mysql_q -e "SHOW DATABASES") || return 1
-    for db in $dbs; do
+    while IFS= read -r db || [ -n "$db" ]; do
+        [ -n "$db" ] || continue
         if is_system "$db"; then
             continue
         fi
-        if ! is_name "$db"; then
-            echo "skipping unexpected database name: $db" >&2
+        if ! is_beads "$db"; then
+            echo "skipping: $db" >&2
             continue
         fi
         printf '%s\n' "$db"
-    done
+    done <<< "$dbs"
 }
 
 config_value() {
     local db=$1 key=$2 value
-    value=$(mysql_q -e "USE \`$db\`; SELECT value FROM config WHERE \`key\`='$key' LIMIT 1" 2>/dev/null || true)
+    value=$(mysql_q --database="$db" -e "SELECT value FROM config WHERE \`key\`='$key' LIMIT 1" 2>/dev/null || true)
     value=${value%%$'\n'*}
     value=${value%$'\r'}
     printf '%s' "$value"
@@ -122,7 +131,7 @@ repo_of() {
         "SELECT repo_path FROM repo_mtimes LIMIT 1"
     )
     for sql in "${queries[@]}"; do
-        value=$(mysql_q -e "USE \`$db\`; $sql" 2>/dev/null || true)
+        value=$(mysql_q --database="$db" -e "$sql" 2>/dev/null || true)
         value=${value%%$'\n'*}
         value=${value%$'\r'}
         if [ -n "$value" ]; then
@@ -135,13 +144,11 @@ repo_of() {
 
 require_database() {
     local only=$1 name
-    if is_name "$only"; then
-        while IFS= read -r name; do
-            if [ "$name" = "$only" ]; then
-                return 0
-            fi
-        done < <(user_databases)
-    fi
+    while IFS= read -r name; do
+        if [ "$name" = "$only" ]; then
+            return 0
+        fi
+    done < <(user_databases)
     echo "Database $only was not found. Available options:" >&2
     cmd_list >&2
     exit 1
@@ -182,7 +189,7 @@ cmd_issues() {
             continue
         fi
         err=$(mktemp)
-        if ! rows=$(mysql_q -e "USE \`$db\`; SELECT id, status, priority, issue_type, REPLACE(REPLACE(title, CHAR(9), ' '), CHAR(10), ' ') FROM issues ORDER BY id" 2>"$err"); then
+        if ! rows=$(mysql_q --database="$db" -e "SELECT id, status, priority, issue_type, REPLACE(REPLACE(title, CHAR(9), ' '), CHAR(10), ' ') FROM issues ORDER BY id" 2>"$err"); then
             prefix=$(prefix_of "$db")
             echo "# $db $prefix"
             echo "no issues table: $(head -n 1 "$err")"
@@ -227,6 +234,14 @@ print_stats_table() {
             if (s == "CLOSED") return 5
             return 9
         }
+        function slabel(s) {
+            if (s == "OPEN") return "OPEN"
+            if (s == "IN_PROGRESS") return "PROG"
+            if (s == "BLOCKED") return "BLKD"
+            if (s == "DEFERRED") return "DEFR"
+            if (s == "CLOSED") return "CLSD"
+            return s
+        }
         function fit(col, text) {
             text = text ""
             if (length(text) > width[col]) width[col] = length(text)
@@ -252,14 +267,14 @@ print_stats_table() {
         function rule(left, mid, right,    c, line) {
             line = left
             for (c = 1; c <= ncols; c++) {
-                line = line repeat("─", width[c] + 2)
+                line = line repeat("─", width[c])
                 if (c < ncols) line = line mid
             }
             return line right
         }
         function join_row(numeric,    c, line) {
             line = "│"
-            for (c = 1; c <= ncols; c++) line = line " " field(c, cells[c], numeric && c > 1) " │"
+            for (c = 1; c <= ncols; c++) line = line field(c, cells[c], numeric && c > 1) "│"
             return line
         }
         function show(text, do_bold) {
@@ -336,7 +351,7 @@ print_stats_table() {
             sort_statuses()
             sort_priorities()
             headers[++ncols] = "Database"
-            for (i = 1; i <= ns; i++) headers[++ncols] = statuses[i]
+            for (i = 1; i <= ns; i++) headers[++ncols] = slabel(statuses[i])
             for (i = 1; i <= np; i++) headers[++ncols] = "P" priorities[i]
             headers[++ncols] = "Total"
             for (c = 1; c <= ncols; c++) width[c] = length(headers[c])
@@ -348,7 +363,7 @@ print_stats_table() {
             fit(col, total_sum())
             show(rule("┌", "┬", "┐"), 0)
             for (c = 1; c <= ncols; c++) cells[c] = headers[c]
-            show(join_row(0), 1)
+            show(join_row(1), 1)
             for (d = 1; d <= ndb; d++) {
                 show(rule("├", "┼", "┤"), 0)
                 cells[1] = dbs[d]
@@ -376,14 +391,14 @@ cmd_stats() {
     while IFS= read -r db; do
         [ -n "$db" ] || continue
         err=$(mktemp)
-        if ! status_rows=$(mysql_q -e "USE \`$db\`; SELECT status, COUNT(*) FROM issues GROUP BY status" 2>"$err"); then
+        if ! status_rows=$(mysql_q --database="$db" -e "SELECT status, COUNT(*) FROM issues GROUP BY status" 2>"$err"); then
             echo "$db: no issues table: $(head -n 1 "$err")" >&2
             rm -f "$err"
             continue
         fi
         rm -f "$err"
-        priority_rows=$(mysql_q -e "USE \`$db\`; SELECT priority, COUNT(*) FROM issues GROUP BY priority")
-        total=$(mysql_q -e "USE \`$db\`; SELECT COUNT(*) FROM issues")
+        priority_rows=$(mysql_q --database="$db" -e "SELECT priority, COUNT(*) FROM issues GROUP BY priority")
+        total=$(mysql_q --database="$db" -e "SELECT COUNT(*) FROM issues")
         total=${total%%$'\n'*}
         append_counts "$db" status "$status_rows"
         append_counts "$db" priority "$priority_rows"
@@ -403,12 +418,12 @@ cmd_rename() {
         echo "Database $from is already named $to." >&2
         exit 1
     fi
-    if ! is_name "$to" || is_system "$to"; then
+    if [ -z "$to" ] || is_system "$to" || [ "$to" = "." ] || [ "$to" = ".." ] || [[ "$to" == */* ]]; then
         echo "Refusing destination name '$to'." >&2
         exit 1
     fi
     require_database "$from"
-    if user_databases | grep -qx "$to"; then
+    if user_databases | grep -Fxq "$to"; then
         echo "Database $to already exists." >&2
         exit 1
     fi
@@ -439,7 +454,7 @@ cmd_rename() {
         exit 1
     fi
     for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-        if mysql_q -e "SHOW DATABASES" 2>/dev/null | grep -qx "$to"; then
+        if mysql_q -e "SHOW DATABASES" 2>/dev/null | grep -Fxq "$to"; then
             echo "Renamed $from to $to."
             return 0
         fi
@@ -450,7 +465,7 @@ cmd_rename() {
 }
 
 cmd_purge() {
-    local db=${1:-} answer
+    local db=${1:-} answer drop_sql
     if [ -z "$db" ]; then
         echo "Usage: make purge DB=<database>" >&2
         exit 1
@@ -463,7 +478,8 @@ cmd_purge() {
         echo "Not dropped." >&2
         exit 1
     fi
-    mysql_q -e "DROP DATABASE \`$db\`"
+    printf -v drop_sql 'DROP DATABASE %s' "$(quote_ident "$db")"
+    mysql_q -e "$drop_sql"
     # Dolt keeps a copy under data/.dolt_dropped_databases. Remove that copy
     # so the next sync does not commit the database that was just dropped.
     rm -rf "$ROOT/data/.dolt_dropped_databases/$db" "$ROOT/data/.dolt_dropped_databases/$db.backup."*

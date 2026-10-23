@@ -5,6 +5,11 @@ sql-server.info
 LOCK
 temptf/
 stats/
+oldgen/
+
+# Open chunk journal. DOLT_GC folds it into a *.darc table file.
+**/noms/vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
+**/noms/journal.idx
 
 # Server runtime. Database directories under data/<name>/ are the backup in a private fork.
 data/.dolt/
