@@ -4,7 +4,7 @@ Dolt server that stores one Beads database per project and pushes changes to Git
 
 Fork this repository for your own server and keep that fork private. Once the server is running, its git history contains the database files. This repository does not.
 
-It runs in Docker and checks for changes every minute.
+It runs in Docker and checks for changes every hour.
 
 ## 📑 Contents
 
@@ -133,7 +133,7 @@ bd config set export.git-add true
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `SYNC_INTERVAL` | No | `60` | Seconds between sync cycles. Set it in the environment before `make start`. [`docker-compose.yml`](docker-compose.yml) passes it to [`bin/entrypoint.sh`](bin/entrypoint.sh). |
+| `SYNC_INTERVAL` | No | `3600` | Seconds between sync cycles. One hour. Set it in the environment before `make start`. [`docker-compose.yml`](docker-compose.yml) passes it to [`bin/entrypoint.sh`](bin/entrypoint.sh). |
 
 ```bash
 SYNC_INTERVAL=300 make start

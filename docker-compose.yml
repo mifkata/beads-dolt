@@ -12,4 +12,4 @@ services:
       - ./bin/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./bin/sync.sh:/usr/local/bin/sync.sh:ro
     environment:
-      - SYNC_INTERVAL=${SYNC_INTERVAL:-60}
+      - SYNC_INTERVAL=${SYNC_INTERVAL:-3600}
