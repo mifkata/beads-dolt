@@ -94,54 +94,40 @@ The targets are defined in the [`Makefile`](Makefile). [`bin/databases.sh`](bin/
 
 ### Switch an existing project
 
-Run these commands in the project directory, in this order. `bd dolt show` prints `Mode: embedded` until step 4. `bd dolt set` does not run until then.
-
-1. Export the issues and commit that file in the project.
+Run this in the project directory.
 
 ```bash
+# Save the issues. The next section deletes the embedded database.
 bd export --all -o .beads/issues.jsonl
 git add .beads/issues.jsonl
 git commit -m "backup beads issues before moving to the dolt server"
-```
 
-`.beads/issues.jsonl` holds the titles, descriptions, labels, dependencies, comments, and memories. The next step deletes the embedded database, including its Dolt history. This file is what gets loaded back.
+# Project names. Use host.docker.internal for SERVER_HOST from another container.
+PREFIX=$(bd config get issue_prefix)
+DB_PREFIX=beads_
+DATABASE="${DB_PREFIX}${PREFIX}"
+SERVER_HOST=127.0.0.1
+SERVER_PORT=3307
 
-2. Read the issue prefix.
+# Move the project onto this server.
+bd init --reinit-local --server --external \
+  --server-host "$SERVER_HOST" \
+  --server-port "$SERVER_PORT" \
+  --server-user root \
+  --database "$DATABASE" \
+  --prefix "$PREFIX" \
+  --skip-agents \
+  --non-interactive \
+  --destroy-token="DESTROY-${PREFIX}"
 
-```bash
-bd config get issue_prefix
-```
-
-3. Choose a database name that `make databases` does not already list.
-
-4. Point the project at this server. `<database>` is the name from step 3. `<prefix>` is the value from step 2. From another container, use `--server-host host.docker.internal`.
-
-```bash
-bd init --reinit-local --server --external --server-host 127.0.0.1 --server-port 3307 --server-user root --database <database> --prefix <prefix> --skip-agents
-```
-
-`bd` asks you to confirm. That confirmation deletes the embedded database. If the command prints `This workspace is already initialized`, `--reinit-local` was left out.
-
-Without a terminal, add `--non-interactive --destroy-token=DESTROY-<prefix>`. For prefix `blog`, the token is `DESTROY-blog`.
-
-5. Load the export. `<issue-id>` is an id from `.beads/issues.jsonl`. `bd list` is empty until this import.
-
-```bash
+# Load the saved issues.
 bd import .beads/issues.jsonl
-bd show <issue-id>
 bd dolt show
-```
 
-`bd dolt show` then reports the server at `127.0.0.1:3307`.
-
-6. Keep the export up to date.
-
-```bash
+# Keep .beads/issues.jsonl updating in the project.
 bd config set export.auto true
 bd config set export.git-add true
 ```
-
-Those settings live in `.beads/config.yaml`. Commit `.beads/issues.jsonl` in the project when it changes.
 
 ## 🔩 Configuration
 
