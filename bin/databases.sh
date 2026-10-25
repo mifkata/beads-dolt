@@ -13,11 +13,11 @@ Usage:
   databases.sh issues [--no-color] [database]
   databases.sh stats [--no-color]
   databases.sh purge <database>
-  databases.sh rename <from> <to>
+  databases.sh rename
 
 Issue lines use color in a terminal. --no-color, or a set NO_COLOR variable, prints plain text.
 purge drops one database. Type that database's name when asked.
-rename stops the server, renames the database directory, and starts the server. Type the new name when asked.
+rename asks which database, the new name, and an optional repository. Confirmation defaults to no.
 EOF
 }
 
@@ -61,6 +61,20 @@ quote_ident() {
     local name=$1
     name=${name//\`/\`\`}
     printf '`%s`' "$name"
+}
+
+sql_literal() {
+    local value=$1
+    value=${value//\'/\'\'}
+    printf '%s' "$value"
+}
+
+ask() {
+    local reply
+    printf '%s' "$1" >&2
+    IFS= read -r reply || true
+    reply=${reply%$'\r'}
+    printf '%s' "$reply"
 }
 
 upper() {
@@ -408,21 +422,32 @@ cmd_stats() {
     rm -f "$stats_file"
 }
 
+set_repository() {
+    local db=$1 url=$2 literal
+    literal=$(sql_literal "$url")
+    mysql_q --database="$db" -e "INSERT INTO config (\`key\`, value) VALUES ('sync.remote', '$literal') ON DUPLICATE KEY UPDATE value='$literal'"
+}
+
 cmd_rename() {
-    local from=${1:-} to=${2:-} answer i
-    if [ -z "$from" ] || [ -z "$to" ]; then
-        echo "Usage: make db-rename FROM=<database> TO=<database>" >&2
+    local from to current repo answer i confirm_repo=""
+    echo
+    cmd_list
+    echo
+    from=$(ask "Database: ")
+    if [ -z "$from" ]; then
+        echo "Not renamed." >&2
+        exit 1
+    fi
+    require_database "$from"
+    to=$(ask "New name: ")
+    if [ -z "$to" ] || is_system "$to" || [ "$to" = "." ] || [ "$to" = ".." ] || [[ "$to" == */* ]]; then
+        echo "Refusing destination name '$to'." >&2
         exit 1
     fi
     if [ "$from" = "$to" ]; then
         echo "Database $from is already named $to." >&2
         exit 1
     fi
-    if [ -z "$to" ] || is_system "$to" || [ "$to" = "." ] || [ "$to" = ".." ] || [[ "$to" == */* ]]; then
-        echo "Refusing destination name '$to'." >&2
-        exit 1
-    fi
-    require_database "$from"
     if user_databases | grep -Fxq "$to"; then
         echo "Database $to already exists." >&2
         exit 1
@@ -431,10 +456,21 @@ cmd_rename() {
         echo "Database $from has no directory under data/." >&2
         exit 1
     fi
-    printf 'Type %s to rename %s to it: ' "$to" "$from"
-    IFS= read -r answer || true
-    answer=${answer%$'\r'}
-    if [ "$answer" != "$to" ]; then
+    current=$(repo_of "$from")
+    if [ "$current" = "—" ]; then
+        repo=$(ask "Repository (empty to skip): ")
+    else
+        repo=$(ask "Repository [$current]: ")
+    fi
+    if [ -n "$repo" ] && [ "$repo" != "$current" ]; then
+        confirm_repo="$repo"
+    fi
+    if [ -n "$confirm_repo" ]; then
+        answer=$(ask "Rename $from to $to and repository to $confirm_repo? [y/N] ")
+    else
+        answer=$(ask "Rename $from to $to? [y/N] ")
+    fi
+    if [ "$answer" != "y" ] && [ "$answer" != "Y" ]; then
         echo "Not renamed." >&2
         exit 1
     fi
@@ -455,6 +491,12 @@ cmd_rename() {
     fi
     for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
         if mysql_q -e "SHOW DATABASES" 2>/dev/null | grep -Fxq "$to"; then
+            if [ -n "$confirm_repo" ]; then
+                if ! set_repository "$to" "$confirm_repo"; then
+                    echo "Renamed $from to $to, but the repository was not saved." >&2
+                    exit 1
+                fi
+            fi
             echo "Renamed $from to $to."
             return 0
         fi
@@ -492,6 +534,6 @@ case "$cmd" in
     issues) cmd_issues "${2:-}" ;;
     stats) cmd_stats ;;
     purge) cmd_purge "${2:-}" ;;
-    rename) cmd_rename "${2:-}" "${3:-}" ;;
+    rename) cmd_rename ;;
     *) usage >&2; exit 1 ;;
 esac

@@ -2,8 +2,6 @@ SYNC_INTERVAL ?= 3600
 export SYNC_INTERVAL
 
 DB ?=
-FROM ?=
-TO ?=
 
 .PHONY: start stop build rebuild restart shell mysql logs test databases issues stats purge db-rename
 
@@ -60,4 +58,4 @@ purge:
 	@./bin/databases.sh purge $(DB)
 
 db-rename:
-	@./bin/databases.sh rename "$(FROM)" "$(TO)"
+	@./bin/databases.sh rename
