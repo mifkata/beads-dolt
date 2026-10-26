@@ -178,7 +178,7 @@ backup_dolt() {
 }
 
 flush_dolt() {
-    local err dbs db out count
+    local err dbs db out
     err=$(mktemp)
     if ! dbs=$(mysql_q -e "SHOW DATABASES" 2>"$err"); then
         echo "[$NOW] dolt: cannot list databases: $(cat "$err")"
@@ -216,25 +216,6 @@ flush_dolt() {
         fi
 
         backup_dolt "$db"
-
-        if ! count=$(mysql_q --database="$db" -e "SELECT COUNT(*) FROM dolt_remotes WHERE name='origin';" 2>&1); then
-            echo "[$NOW] dolt: $db remote check failed: $count"
-            failed=1
-            continue
-        fi
-        [ "$count" = "0" ] && continue
-
-        echo "[$NOW] dolt: $db pulling origin"
-        if ! out=$(mysql_q --database="$db" -e "CALL DOLT_PULL('origin');" 2>&1); then
-            echo "[$NOW] dolt: $db pull failed: $out"
-            failed=1
-            continue
-        fi
-        echo "[$NOW] dolt: $db pushing origin"
-        if ! out=$(mysql_q --database="$db" -e "CALL DOLT_PUSH('origin', 'main');" 2>&1); then
-            echo "[$NOW] dolt: $db push failed (will retry): $out"
-            failed=1
-        fi
     done <<< "$dbs"
 
     if [ -n "$committed" ]; then

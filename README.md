@@ -14,7 +14,6 @@ It runs in Docker and checks for changes every six hours.
 - [Usage](#-usage)
 - [Configuration](#-configuration)
 - [Architecture](#-architecture)
-- [Troubleshooting](#-troubleshooting)
 - [License](#-license)
 
 ## 📦 Requirements
@@ -183,7 +182,7 @@ CALL dolt_remote('add', 'origin', '<remote-url>');
 SELECT * FROM dolt_remotes;
 ```
 
-After a remote named `origin` exists, the sync cycle pulls it and pushes it.
+The sync cycle does not pull or push Dolt remotes. Use `bd dolt push` and `bd dolt pull` from the project.
 
 | Host | Container | Purpose |
 | --- | --- | --- |
@@ -206,26 +205,7 @@ flowchart LR
   repo --> github[GitHub]
 ```
 
-[`bin/entrypoint.sh`](bin/entrypoint.sh) starts the SQL server on port 3307 and serves each database directory under `data/`. [`bin/sync.sh`](bin/sync.sh) runs on startup and then every `SYNC_INTERVAL` seconds. For each database it makes a Dolt commit, writes the SQL dump to `backups/<database>.sql`, and runs garbage collection. Then it commits a dirty git tree and pushes when `main` is ahead of `origin/main`. Once there are more than `BACKUP_KEEP` auto-sync commits, the oldest ones are folded into the commit after them and `main` is force-pushed. Your own commits are kept. A Dolt remote named `origin` is pulled and pushed in that cycle, and a conflict waits until it is resolved.
-
-## 🩺 Troubleshooting
-
-The sync log names the database when a pull leaves conflicts. Connect and resolve them. The next cycle pushes the resolution.
-
-```bash
-make mysql
-```
-
-```sql
-USE <database>;
-SELECT * FROM dolt_conflicts;
-SELECT * FROM dolt_conflicts_<table_name>;
-CALL dolt_conflicts_resolve('--ours', '<table_name>');
-CALL dolt_conflicts_resolve('--theirs', '<table_name>');
-CALL dolt_commit('-am', 'resolve merge conflict');
-```
-
-Use one of the two resolve calls. `--ours` keeps this server's row. `--theirs` keeps the remote row.
+[`bin/entrypoint.sh`](bin/entrypoint.sh) starts the SQL server on port 3307 and serves each database directory under `data/`. [`bin/sync.sh`](bin/sync.sh) runs on startup and then every `SYNC_INTERVAL` seconds. For each database it makes a Dolt commit, writes the SQL dump to `backups/<database>.sql`, and runs garbage collection. Then it commits a dirty git tree and pushes when `main` is ahead of `origin/main`. Once there are more than `BACKUP_KEEP` auto-sync commits, the oldest ones are folded into the commit after them and `main` is force-pushed. Your own commits are kept.
 
 ## 📄 License
 
