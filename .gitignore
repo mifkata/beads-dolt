@@ -1,17 +1,10 @@
 .ssh/
 *.swp
-git-remote-cache/
-sql-server.info
 LOCK
-temptf/
-stats/
-oldgen/
 
-# Open chunk journal. DOLT_GC folds it into a *.darc table file.
-**/noms/vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv
-**/noms/journal.idx
+# Live databases and server runtime. The backup is backups/<database>.sql, written by bin/sync.sh and committed in a private fork.
+/data/*
+!/data/config.yaml
 
-# Server runtime. Database directories under data/<name>/ are the backup in a private fork.
-data/.dolt/
-data/.doltcfg/
-data/.dolt_dropped_databases/
+# A .dolt directory at the repo root.
+/.dolt/

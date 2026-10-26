@@ -2,10 +2,14 @@
 #
 # Back up the running dolt server.
 #   1. Commit each database through the SQL server (the CLI cannot lock a
-#      database the server already has open).
+#      database the server already has open), dump it as SQL text into
+#      backups/<database>.sql, then garbage-collect it.
 #   2. Commit the git working tree if it is dirty.
-#   3. Push to origin only when local main is ahead.
-# A failed cycle exits non-zero so the caller retries. Nothing here force-pushes.
+#   3. Keep the newest BACKUP_KEEP auto-sync commits: older ones are folded
+#      into the commit that follows them.
+#   4. Push to origin only when local main is ahead. After a fold the push is
+#      forced with a lease on the fetched origin/main.
+# A failed cycle exits non-zero so the caller retries.
 
 set -u
 
@@ -154,6 +158,25 @@ update_readme_databases() {
     echo "[$NOW] readme: updated database list"
 }
 
+backup_dolt() {
+    local db=$1 tmp out
+    tmp=$(mktemp -d)
+    # One row per INSERT line, so git stores only the rows that changed.
+    if ! out=$(cd "/data/$db" && dolt dump -r sql --no-batch -fn "$tmp/dump.sql" 2>&1); then
+        echo "[$NOW] dolt: $db dump failed: $out"
+        rm -rf "$tmp"
+        failed=1
+        return
+    fi
+    mkdir -p /repo/backups
+    mv "$tmp/dump.sql" "/repo/backups/$db.sql"
+    rm -rf "$tmp"
+    if ! out=$(mysql_q --database="$db" -e "CALL DOLT_GC();" 2>&1); then
+        echo "[$NOW] dolt: $db gc failed: $out"
+        failed=1
+    fi
+}
+
 flush_dolt() {
     local err dbs db out count
     err=$(mktemp)
@@ -192,6 +215,8 @@ flush_dolt() {
             fi
         fi
 
+        backup_dolt "$db"
+
         if ! count=$(mysql_q --database="$db" -e "SELECT COUNT(*) FROM dolt_remotes WHERE name='origin';" 2>&1); then
             echo "[$NOW] dolt: $db remote check failed: $count"
             failed=1
@@ -215,6 +240,49 @@ flush_dolt() {
     if [ -n "$committed" ]; then
         echo "[$NOW] dolt committed:${committed}"
     fi
+}
+
+fold_history() {
+    local keep=${BACKUP_KEEP:-50} commit tree parent="" old msg
+    local -a autos
+    local -A drop=()
+    if ! [[ "$keep" =~ ^[1-9][0-9]*$ ]]; then
+        echo "[$NOW] git: BACKUP_KEEP must be a positive number (got '$keep') — not folding"
+        return 1
+    fi
+    if [ "$(git symbolic-ref --short -q HEAD)" != "main" ] || [ -n "$(git rev-list --merges HEAD)" ]; then
+        return 1
+    fi
+    mapfile -t autos < <(git log --format='%H %s' HEAD | awk '$2 == "auto-sync:" {print $1}')
+    [ "${#autos[@]}" -gt "$keep" ] || return 1
+    for commit in "${autos[@]:$keep}"; do
+        drop[$commit]=1
+    done
+    old=$(git rev-parse HEAD)
+    while IFS= read -r commit; do
+        [ -n "${drop[$commit]:-}" ] && continue
+        tree=$(git rev-parse "$commit^{tree}")
+        msg=$(git log -1 --format=%B "$commit")
+        if ! parent=$(printf '%s\n' "$msg" | \
+            GIT_AUTHOR_NAME=$(git log -1 --format=%an "$commit") \
+            GIT_AUTHOR_EMAIL=$(git log -1 --format=%ae "$commit") \
+            GIT_AUTHOR_DATE=$(git log -1 --format=%aI "$commit") \
+            GIT_COMMITTER_NAME=$(git log -1 --format=%cn "$commit") \
+            GIT_COMMITTER_EMAIL=$(git log -1 --format=%ce "$commit") \
+            GIT_COMMITTER_DATE=$(git log -1 --format=%cI "$commit") \
+            git commit-tree "$tree" ${parent:+-p "$parent"}); then
+            echo "[$NOW] git: fold failed at $commit"
+            failed=1
+            return 1
+        fi
+    done < <(git rev-list --reverse HEAD)
+    if ! git diff --quiet "$old" "$parent"; then
+        echo "[$NOW] git: folded tree differs from HEAD — not folding"
+        failed=1
+        return 1
+    fi
+    git update-ref -m "fold auto-sync history" refs/heads/main "$parent" "$old"
+    echo "[$NOW] git: folded ${#drop[@]} auto-sync commit(s), keeping the newest $keep"
 }
 
 git_sync() {
@@ -302,6 +370,22 @@ ${path} (${bytes} bytes)"
         return
     fi
 
+    local push_out lease
+    if git merge-base --is-ancestor origin/main HEAD && fold_history; then
+        lease=$(git rev-parse origin/main)
+        echo "[$NOW] git: force-pushing folded history"
+        if ! push_out=$(timeout 600 git push --force-with-lease="main:$lease" origin HEAD:main 2>&1); then
+            echo "[$NOW] git: push failed (will retry): $push_out"
+            failed=1
+            return
+        fi
+        [ -n "$push_out" ] && echo "$push_out"
+        git reflog expire --expire=now --all
+        git gc --prune=now --quiet
+        echo "[$NOW] git: push done"
+        return
+    fi
+
     local ahead
     ahead=$(git rev-list --count origin/main..HEAD 2>/dev/null || echo "")
     if [ -z "$ahead" ]; then
@@ -317,7 +401,6 @@ ${path} (${bytes} bytes)"
     fi
 
     echo "[$NOW] git: pushing $ahead commit(s)"
-    local push_out
     if ! push_out=$(timeout 600 git push origin HEAD:main 2>&1); then
         echo "[$NOW] git: push failed (will retry): $push_out"
         failed=1

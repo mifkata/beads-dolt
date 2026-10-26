@@ -2,9 +2,9 @@
 
 Dolt server that stores one Beads database per project and pushes changes to GitHub.
 
-Fork this repository for your own server and keep that fork private. Once the server is running, its git history contains the database files. This repository does not.
+Fork this repository for your own server and keep that fork private. Once the server is running, its git history contains an SQL dump of every database. This repository does not.
 
-It runs in Docker and checks for changes every hour.
+It runs in Docker and checks for changes every six hours.
 
 ## 📑 Contents
 
@@ -42,7 +42,13 @@ cd beads-dolt
 make start
 ```
 
-4. Check that the server is up.
+4. Load the databases from `backups/`. A new fork has none yet, and a database the server already serves is left as it is.
+
+```bash
+make restore
+```
+
+5. Check that the server is up.
 
 ```bash
 make test
@@ -50,7 +56,7 @@ make test
 
 This runs inside the container. A running server prints `✅ Dolt is serving on port 3307`. `make databases` lists what it is serving.
 
-5. Connect each project by following [Switch an existing project](#switch-an-existing-project). One project uses one database.
+6. Connect each project by following [Switch an existing project](#switch-an-existing-project). One project uses one database.
 
 ## 📚 Databases
 
@@ -80,8 +86,10 @@ This runs inside the container. A running server prints `✅ Dolt is serving on 
 | `make stats` | Print a table of issue counts for every database, by status, priority, and total |
 | `make purge DB=<database>` | Drop one database after you type its name |
 | `make db-rename` | Ask which database to rename, the new name, and an optional repository. Confirmation defaults to no |
+| `make restore` | Load every database in `backups/` that the server is not serving |
+| `make restore DB=<database>` | Load one database from `backups/<database>.sql` |
 
-The targets are defined in the [`Makefile`](Makefile). [`bin/databases.sh`](bin/databases.sh) is the script behind these targets. An issue line looks like `pl-dcq [CLOSED][P2](feature): Implement Admin Worker Tasks page (pl-ri6)`. `make issues` prefixes each line with its database, as in `beads_pl/pl-dcq [CLOSED][P2](feature): Implement Admin Worker Tasks page (pl-ri6)`. `make issues DB=<database>` prints the id alone. In a terminal the id is cyan, the status is colored by state, and the type is magenta. `./bin/databases.sh issues --no-color` prints the same text in plain form, and so does a set `NO_COLOR` variable. An unknown database name prints `Database <database> was not found. Available options:` followed by that list. `make db-rename` asks which database, the new name, and an optional repository. Pressing Enter at the confirmation leaves the database unchanged. Answering `y` stops the server, renames that database's directory under `data/`, and starts the server. Dolt keeps the issue prefix. A repository you type is stored as `sync.remote`. `make purge` drops a single database, and only after the name you type matches it. `information_schema`, `mysql`, `performance_schema`, and `sys` are refused. It also removes that database's copy under `data/.dolt_dropped_databases/`, so the next sync does not commit the dropped database.
+The targets are defined in the [`Makefile`](Makefile). [`bin/databases.sh`](bin/databases.sh) is the script behind these targets. An issue line looks like `pl-dcq [CLOSED][P2](feature): Implement Admin Worker Tasks page (pl-ri6)`. `make issues` prefixes each line with its database, as in `beads_pl/pl-dcq [CLOSED][P2](feature): Implement Admin Worker Tasks page (pl-ri6)`. `make issues DB=<database>` prints the id alone. In a terminal the id is cyan, the status is colored by state, and the type is magenta. `./bin/databases.sh issues --no-color` prints the same text in plain form, and so does a set `NO_COLOR` variable. An unknown database name prints `Database <database> was not found. Available options:` followed by that list. `make db-rename` asks which database, the new name, and an optional repository. Pressing Enter at the confirmation leaves the database unchanged. Answering `y` stops the server, renames that database's directory under `data/` and its backup under `backups/`, and starts the server. Dolt keeps the issue prefix. A repository you type is stored as `sync.remote`. `make purge` drops a single database, and only after the name you type matches it. `information_schema`, `mysql`, `performance_schema`, and `sys` are refused. It also removes that database's backup under `backups/` and Dolt's copy under `data/.dolt_dropped_databases/`, so the next sync does not commit the dropped database.
 
 | Command | Description |
 | --- | --- |
@@ -129,11 +137,22 @@ bd config set export.auto true
 bd config set export.git-add true
 ```
 
+### Restore a database
+
+Each sync writes an SQL dump of every database to `backups/<database>.sql`, one row per line, and git commits only the rows that changed. Restore loads a dump into the running server, so no restart is needed. It restores the data, not the Dolt commit history.
+
+```bash
+make restore DB=<database>
+```
+
+`<database>` is a file name under `backups/` without `.sql`, such as `beads_pl`. A database the server already serves is refused with `Database <database> is already served. Not restored.` Drop it first with `make purge DB=<database>` only if the backup should replace it, because purge also deletes `backups/<database>.sql`. Copy that file out of the way before the purge. A name with no backup prints `No backup for <database> under backups/.`
+
 ## 🔩 Configuration
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `SYNC_INTERVAL` | No | `3600` | Seconds between sync cycles. One hour. Set it in the environment before `make start`. [`docker-compose.yml`](docker-compose.yml) passes it to [`bin/entrypoint.sh`](bin/entrypoint.sh). |
+| `SYNC_INTERVAL` | No | `21600` | Seconds between sync cycles. Six hours. Set it in the environment before `make start`. [`docker-compose.yml`](docker-compose.yml) passes it to [`bin/entrypoint.sh`](bin/entrypoint.sh). |
+| `BACKUP_KEEP` | No | `50` | Auto-sync commits kept in git history. Older ones are folded away, and their dumps survive only in the commit after them. Set it in the environment before `make start`, like `SYNC_INTERVAL`. |
 
 ```bash
 SYNC_INTERVAL=300 make start
@@ -168,8 +187,8 @@ After a remote named `origin` exists, the sync cycle pulls it and pushes it.
 
 | Host | Container | Purpose |
 | --- | --- | --- |
-| `./data` | `/data` | Databases and server config |
-| `.` | `/repo` | Git repository |
+| `./data` | `/data` | Live databases, not committed, and server config |
+| `.` | `/repo` | Git repository, including the committed backups in `backups/` |
 | `.ssh` | `/home/dev/.ssh` | SSH key used for the Git push |
 | [`bin/entrypoint.sh`](bin/entrypoint.sh) | `/usr/local/bin/entrypoint.sh` | Process entrypoint |
 | [`bin/sync.sh`](bin/sync.sh) | `/usr/local/bin/sync.sh` | Sync script |
@@ -181,11 +200,13 @@ flowchart LR
   client[Beads client] --> server[Dolt SQL server]
   server --> databases[data databases]
   loop[Sync loop] --> server
-  loop --> repo[Git repository]
+  server --> backups[backups folder]
+  backups --> repo[Git repository]
+  loop --> repo
   repo --> github[GitHub]
 ```
 
-[`bin/entrypoint.sh`](bin/entrypoint.sh) starts the SQL server on port 3307 and serves each database directory under [`data/`](data/). [`bin/sync.sh`](bin/sync.sh) runs on startup and then every `SYNC_INTERVAL` seconds: it commits each database, commits a dirty git tree, and pushes when `main` is ahead of `origin/main`. A Dolt remote named `origin` is pulled and pushed in that cycle, and a conflict waits until it is resolved.
+[`bin/entrypoint.sh`](bin/entrypoint.sh) starts the SQL server on port 3307 and serves each database directory under `data/`. [`bin/sync.sh`](bin/sync.sh) runs on startup and then every `SYNC_INTERVAL` seconds. For each database it makes a Dolt commit, writes the SQL dump to `backups/<database>.sql`, and runs garbage collection. Then it commits a dirty git tree and pushes when `main` is ahead of `origin/main`. Once there are more than `BACKUP_KEEP` auto-sync commits, the oldest ones are folded into the commit after them and `main` is force-pushed. Your own commits are kept. A Dolt remote named `origin` is pulled and pushed in that cycle, and a conflict waits until it is resolved.
 
 ## 🩺 Troubleshooting
 

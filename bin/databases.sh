@@ -1,5 +1,5 @@
 #!/bin/bash
-# List databases, list their issues, count them, rename one, or drop one after the name is typed.
+# List databases, list their issues, count them, rename one, drop one after the name is typed, or restore from backups/.
 
 set -u
 
@@ -14,10 +14,12 @@ Usage:
   databases.sh stats [--no-color]
   databases.sh purge <database>
   databases.sh rename
+  databases.sh restore [database]
 
 Issue lines use color in a terminal. --no-color, or a set NO_COLOR variable, prints plain text.
-purge drops one database. Type that database's name when asked.
+purge drops one database and its backup. Type that database's name when asked.
 rename asks which database, the new name, and an optional repository. Confirmation defaults to no.
+restore loads a database from backups/<database>.sql; without a name, every backup the server is not serving.
 EOF
 }
 
@@ -428,6 +430,16 @@ set_repository() {
     mysql_q --database="$db" -e "INSERT INTO config (\`key\`, value) VALUES ('sync.remote', '$literal') ON DUPLICATE KEY UPDATE value='$literal'"
 }
 
+rename_dump() {
+    local from=$1 to=$2 first
+    IFS= read -r first < "$ROOT/backups/$from.sql"
+    {
+        printf '%s\n' "${first//\`$from\`/\`$to\`}"
+        tail -n +2 "$ROOT/backups/$from.sql"
+    } > "$ROOT/backups/$to.sql"
+    rm -f "$ROOT/backups/$from.sql"
+}
+
 cmd_rename() {
     local from to current repo answer i confirm_repo=""
     echo
@@ -484,6 +496,9 @@ cmd_rename() {
         echo "Rename failed. The server was started again." >&2
         exit 1
     fi
+    if [ -f "$ROOT/backups/$from.sql" ]; then
+        rename_dump "$from" "$to"
+    fi
     echo "Starting the server."
     if ! docker compose start; then
         echo "Renamed the directory to $to, but the server did not start." >&2
@@ -524,8 +539,43 @@ cmd_purge() {
     mysql_q -e "$drop_sql"
     # Dolt keeps a copy under data/.dolt_dropped_databases. Remove that copy
     # so the next sync does not commit the database that was just dropped.
-    rm -rf "$ROOT/data/.dolt_dropped_databases/$db" "$ROOT/data/.dolt_dropped_databases/$db.backup."*
+    rm -rf "$ROOT/data/.dolt_dropped_databases/$db" "$ROOT/data/.dolt_dropped_databases/$db.backup."* "$ROOT/backups/$db.sql"
     echo "Dropped $db."
+}
+
+restore_one() {
+    local db=$1
+    if [ ! -f "$ROOT/backups/$db.sql" ]; then
+        echo "No backup for $db under backups/." >&2
+        return 1
+    fi
+    if user_databases | grep -Fxq "$db"; then
+        echo "Database $db is already served. Not restored." >&2
+        return 1
+    fi
+    if ! docker compose exec -T dolt mysql --protocol=TCP -h 127.0.0.1 -P 3307 -u root < "$ROOT/backups/$db.sql"; then
+        echo "Could not restore $db." >&2
+        return 1
+    fi
+    echo "Restored $db."
+}
+
+cmd_restore() {
+    local db=${1:-} file served failed=0
+    if [ -n "$db" ]; then
+        restore_one "$db" || exit 1
+        return 0
+    fi
+    served=$(user_databases)
+    for file in "$ROOT"/backups/*.sql; do
+        [ -f "$file" ] || continue
+        db=$(basename "$file" .sql)
+        if printf '%s\n' "$served" | grep -Fxq "$db"; then
+            continue
+        fi
+        restore_one "$db" || failed=1
+    done
+    [ "$failed" -eq 0 ] || exit 1
 }
 
 cmd=${1:-}
@@ -535,5 +585,6 @@ case "$cmd" in
     stats) cmd_stats ;;
     purge) cmd_purge "${2:-}" ;;
     rename) cmd_rename ;;
+    restore) cmd_restore "${2:-}" ;;
     *) usage >&2; exit 1 ;;
 esac

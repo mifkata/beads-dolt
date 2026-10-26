@@ -5,7 +5,7 @@ set -euo pipefail
 # and that module fails in a container, so the job is skipped with no log line.
 # A loop is the schedule.
 
-INTERVAL="${SYNC_INTERVAL:-3600}"
+INTERVAL="${SYNC_INTERVAL:-21600}"
 if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]] || [ "$INTERVAL" -lt 1 ]; then
     echo "SYNC_INTERVAL must be a positive number of seconds (got '${SYNC_INTERVAL:-}')"
     exit 1

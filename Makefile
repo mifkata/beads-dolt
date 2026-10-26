@@ -1,9 +1,11 @@
-SYNC_INTERVAL ?= 3600
+SYNC_INTERVAL ?= 21600
 export SYNC_INTERVAL
+BACKUP_KEEP ?= 50
+export BACKUP_KEEP
 
 DB ?=
 
-.PHONY: start stop build rebuild restart shell mysql logs test databases issues stats purge db-rename
+.PHONY: start stop build rebuild restart shell mysql logs test databases issues stats purge db-rename restore
 
 start:
 	docker compose up -d
@@ -59,3 +61,6 @@ purge:
 
 db-rename:
 	@./bin/databases.sh rename
+
+restore:
+	@./bin/databases.sh restore $(DB)
